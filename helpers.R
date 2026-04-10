@@ -1,3 +1,20 @@
 # helpers.R
 # Utility functions for the Flow Cytometry Shiny app.
-# Functionality will be added here as the app is developed.
+
+#' Load all .fcs files from a directory into a flowSet.
+#' Returns NULL (invisibly) if no .fcs files are found or loading fails.
+load_fcs_folder <- function(folder_path) {
+  fcs_files <- list.files(folder_path, pattern = "\\.fcs$",
+                           full.names = TRUE, ignore.case = TRUE)
+  if (length(fcs_files) == 0) return(NULL)
+
+  tryCatch(
+    flowCore::read.flowSet(fcs_files,
+                           transformation      = FALSE,
+                           truncate_max_range  = FALSE),
+    error = function(e) {
+      message("Error loading .fcs files: ", conditionMessage(e))
+      NULL
+    }
+  )
+}
