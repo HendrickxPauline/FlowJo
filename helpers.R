@@ -18,3 +18,15 @@ load_fcs_folder <- function(folder_path) {
     }
   )
 }
+
+#' Extract all events for one channel from a flowSet into a tidy data frame.
+#' Returns a data frame with columns: sample (filename) and value (raw intensity).
+extract_channel_data <- function(fs, channel) {
+  do.call(rbind, lapply(flowCore::sampleNames(fs), function(sname) {
+    data.frame(
+      sample = sname,
+      value  = flowCore::exprs(fs[[sname]])[, channel],
+      stringsAsFactors = FALSE
+    )
+  }))
+}
