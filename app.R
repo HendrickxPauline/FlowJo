@@ -2,6 +2,7 @@ library(shiny)
 library(bslib)
 library(shinyFiles)
 library(rhandsontable)
+library(flowCore)
 
 source("helpers.R")
 
