@@ -4,8 +4,8 @@ library(shinyFiles)
 
 source("helpers.R")
 
-# Roots exposed to shinyFiles — shared between UI and server
-ROOTS <- c(Home = path.expand("~"), Root = "/")
+# Auto-detect all available drives/volumes (home, external drives, network, etc.)
+ROOTS <- getVolumes()()
 
 ui <- page_sidebar(
   title = "Flow Cytometry Analysis",
