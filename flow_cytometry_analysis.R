@@ -1,209 +1,230 @@
 # =============================================================================
 # Flow Cytometry Data Analysis
 # =============================================================================
-# Requirements:
-#   BiocManager::install("flowCore")
-#   BiocManager::install("ggcyto")
-#   install.packages(c("ggplot2", "dplyr", "tidyr"))
-# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 1. INSTALL & LOAD PACKAGES  (safe, non-interactive)
+# -----------------------------------------------------------------------------
+
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager", repos = "https://cloud.r-project.org")
+
+bioc_pkgs <- c("flowCore", "ggcyto")
+for (pkg in bioc_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE))
+    BiocManager::install(pkg, update = FALSE, ask = FALSE)
+}
+
+cran_pkgs <- c("ggplot2", "dplyr", "tidyr", "scales", "hexbin")
+for (pkg in cran_pkgs) {
+  if (!requireNamespace(pkg, quietly = TRUE))
+    install.packages(pkg, repos = "https://cloud.r-project.org")
+}
 
 library(flowCore)
 library(ggplot2)
 library(dplyr)
 library(tidyr)
+library(scales)
 
 # -----------------------------------------------------------------------------
-# 1. CONFIGURATION
+# 2. CONFIGURATION  — edit these paths and settings
 # -----------------------------------------------------------------------------
 
-# Path to the folder containing your .fcs files
-FCS_DIR <- "data/"
+# Folder containing your .fcs files  (use forward slashes on Windows)
+FCS_DIR <- "E:/Exported data/FLOW CYTOMETRY/09042026_MGC_test"
 
-# Output folder for plots and results
-OUTPUT_DIR <- "output/"
-dir.create(OUTPUT_DIR, showWarnings = FALSE)
+# Where to save plots and CSV results
+OUTPUT_DIR <- "E:/Exported data/FLOW CYTOMETRY/09042026_MGC_test/Output_10042026"
 
-# Threshold for "positive" cells (as a percentile of the unstained control,
-# or set a fixed value if no control is available)
-# Options:
-#   "fixed"    -> uses POSITIVE_THRESHOLD_VALUE for all channels
-#   "percentile" -> uses the top POSITIVE_PERCENTILE of the first file as cutoff
-THRESHOLD_METHOD <- "fixed"
-POSITIVE_THRESHOLD_VALUE <- 1000   # adjust per your instrument / panel
-POSITIVE_PERCENTILE <- 0.99        # used when THRESHOLD_METHOD = "percentile"
+# Threshold method for "positive" cells:
+#   "fixed"      -> every channel uses POSITIVE_THRESHOLD_VALUE
+#   "percentile" -> cutoff = top POSITIVE_PERCENTILE of the first sample
+THRESHOLD_METHOD         <- "fixed"
+POSITIVE_THRESHOLD_VALUE <- 1000    # adjust to match your instrument / panel
+POSITIVE_PERCENTILE      <- 0.99   # only used when THRESHOLD_METHOD = "percentile"
 
-# Channels to EXCLUDE from single-channel plots (e.g. scatter parameters)
-SCATTER_CHANNELS <- c("FSC-A", "FSC-H", "FSC-W", "SSC-A", "SSC-H", "SSC-W",
+# Scatter / time channels to exclude from fluorescence analysis
+SCATTER_CHANNELS <- c("FSC-A", "FSC-H", "FSC-W",
+                       "SSC-A", "SSC-H", "SSC-W",
                        "Time")
 
 # -----------------------------------------------------------------------------
-# 2. READ FCS FILES
+# 3. CREATE OUTPUT FOLDER
 # -----------------------------------------------------------------------------
 
-fcs_files <- list.files(FCS_DIR, pattern = "\\.fcs$", full.names = TRUE,
-                         ignore.case = TRUE)
+dir.create(OUTPUT_DIR, recursive = TRUE, showWarnings = FALSE)
 
-if (length(fcs_files) == 0) {
-  stop("No .fcs files found in: ", FCS_DIR,
-       "\nPlease set FCS_DIR to the folder containing your data.")
-}
+# -----------------------------------------------------------------------------
+# 4. READ FCS FILES
+# -----------------------------------------------------------------------------
+
+fcs_files <- list.files(FCS_DIR, pattern = "\\.fcs$",
+                         full.names = TRUE, ignore.case = TRUE)
+
+if (length(fcs_files) == 0)
+  stop("No .fcs files found in: ", FCS_DIR)
 
 message("Found ", length(fcs_files), " FCS file(s):")
-message(paste(" -", basename(fcs_files), collapse = "\n"))
+message(paste0("  - ", basename(fcs_files), collapse = "\n"))
 
-# Read all files into a flowSet
-fs <- read.flowSet(fcs_files, transformation = FALSE, truncate_max_range = FALSE)
-message("\nFlowSet loaded successfully.")
-message("Channels available: ", paste(colnames(fs), collapse = ", "))
+fs <- read.flowSet(fcs_files, transformation = FALSE,
+                   truncate_max_range = FALSE)
+
+message("\nChannels in data: ", paste(colnames(fs), collapse = ", "))
+
+# Identify fluorescence channels (everything that is not scatter/time)
+fluor_channels <- setdiff(colnames(fs), SCATTER_CHANNELS)
+message("Fluorescence channels: ", paste(fluor_channels, collapse = ", "))
 
 # -----------------------------------------------------------------------------
-# 3. HELPER: extract a tidy data frame from one flowFrame
+# 5. BUILD COMBINED DATA FRAME
 # -----------------------------------------------------------------------------
 
-fcs_to_df <- function(ff, sample_name) {
-  df <- as.data.frame(exprs(ff))
-  df$sample <- sample_name
+all_data <- do.call(rbind, lapply(seq_along(fs), function(i) {
+  df        <- as.data.frame(exprs(fs[[i]]))
+  df$sample <- sampleNames(fs)[i]
   df
-}
-
-# Build a combined data frame (all samples, all channels)
-all_data <- lapply(seq_along(fcs_files), function(i) {
-  fcs_to_df(fs[[i]], sampleNames(fs)[i])
-}) %>% bind_rows()
+}))
 
 # -----------------------------------------------------------------------------
-# 4. SCATTER PLOTS (FSC vs SSC) — one per sample
+# 6. SCATTER PLOTS  (FSC-A vs SSC-A, one per sample)
 # -----------------------------------------------------------------------------
 
-message("\n--- Generating scatter plots (FSC vs SSC) ---")
+message("\n--- Scatter plots (FSC-A vs SSC-A) ---")
 
 fsc_col <- grep("^FSC-A", colnames(all_data), value = TRUE)[1]
 ssc_col <- grep("^SSC-A", colnames(all_data), value = TRUE)[1]
 
 if (!is.na(fsc_col) && !is.na(ssc_col)) {
+
   for (sname in unique(all_data$sample)) {
-    df_s <- filter(all_data, sample == sname)
+    df_s <- all_data[all_data$sample == sname, ]
 
     p <- ggplot(df_s, aes(x = .data[[fsc_col]], y = .data[[ssc_col]])) +
-      geom_hex(bins = 100) +
-      scale_fill_viridis_c(trans = "log1p") +
-      labs(title = paste("Scatter plot —", sname),
-           x = fsc_col, y = ssc_col) +
-      theme_bw()
+      geom_hex(bins = 80) +
+      scale_fill_viridis_c(trans = "log1p", name = "Count") +
+      labs(title = paste("Scatter —", sname), x = fsc_col, y = ssc_col) +
+      theme_bw(base_size = 13)
 
     out_file <- file.path(OUTPUT_DIR,
-                          paste0("scatter_", gsub("[^A-Za-z0-9_]", "_", sname), ".png"))
+                          paste0("scatter_", gsub("[^A-Za-z0-9_-]", "_", sname), ".png"))
     ggsave(out_file, p, width = 6, height = 5, dpi = 150)
     message("  Saved: ", out_file)
   }
+
 } else {
-  message("  FSC-A / SSC-A columns not found — skipping scatter plots.")
+  message("  FSC-A / SSC-A not found — skipping scatter plots.")
 }
 
 # -----------------------------------------------------------------------------
-# 5. PER-CHANNEL HISTOGRAMS (fluorescence channels only)
+# 7. PER-CHANNEL HISTOGRAMS  (all fluorescence channels, all samples overlaid)
 # -----------------------------------------------------------------------------
 
-message("\n--- Generating per-channel histograms ---")
-
-fluor_channels <- setdiff(colnames(fs), SCATTER_CHANNELS)
+message("\n--- Channel histograms ---")
 
 for (ch in fluor_channels) {
   if (!ch %in% colnames(all_data)) next
 
-  p <- ggplot(all_data, aes(x = .data[[ch]], colour = sample, fill = sample)) +
-    geom_density(alpha = 0.3) +
-    scale_x_continuous(trans = scales::pseudo_log_trans(sigma = 1)) +
-    labs(title = paste("Channel:", ch),
-         x = ch, y = "Density") +
-    theme_bw() +
-    theme(legend.position = "bottom")
+  p <- ggplot(all_data, aes(x = .data[[ch]],
+                             colour = sample, fill = sample)) +
+    geom_density(alpha = 0.25, linewidth = 0.7) +
+    scale_x_continuous(
+      trans  = pseudo_log_trans(sigma = 1),
+      labels = label_number(scale_cut = cut_short_scale())
+    ) +
+    labs(title = paste("Channel:", ch), x = ch, y = "Density") +
+    theme_bw(base_size = 13) +
+    theme(legend.position = "bottom",
+          legend.title    = element_blank())
 
   out_file <- file.path(OUTPUT_DIR,
-                        paste0("hist_", gsub("[^A-Za-z0-9_]", "_", ch), ".png"))
+                        paste0("hist_", gsub("[^A-Za-z0-9_-]", "_", ch), ".png"))
   ggsave(out_file, p, width = 7, height = 4, dpi = 150)
   message("  Saved: ", out_file)
 }
 
 # -----------------------------------------------------------------------------
-# 6. MFI (Median Fluorescence Intensity) PER CHANNEL PER SAMPLE
+# 8. MFI  (Median Fluorescence Intensity per channel per sample)
 # -----------------------------------------------------------------------------
 
-message("\n--- Calculating MFI ---")
+message("\n--- MFI ---")
 
 mfi_table <- all_data %>%
   group_by(sample) %>%
-  summarise(across(all_of(fluor_channels), median, na.rm = TRUE),
+  summarise(across(all_of(fluor_channels),
+                   ~ median(.x, na.rm = TRUE)),
             .groups = "drop")
 
-message("MFI table:")
 print(as.data.frame(mfi_table))
 
 write.csv(mfi_table,
-          file = file.path(OUTPUT_DIR, "MFI_per_channel.csv"),
+          file      = file.path(OUTPUT_DIR, "MFI_per_channel.csv"),
           row.names = FALSE)
-message("  Saved: ", file.path(OUTPUT_DIR, "MFI_per_channel.csv"))
+message("  Saved: MFI_per_channel.csv")
 
 # -----------------------------------------------------------------------------
-# 7. PERCENTAGE POSITIVE CELLS PER CHANNEL PER SAMPLE
+# 9. PERCENTAGE POSITIVE CELLS per channel per sample
 # -----------------------------------------------------------------------------
 
-message("\n--- Calculating % positive cells ---")
+message("\n--- % positive cells ---")
 
-# Determine thresholds
+# Build threshold vector
 if (THRESHOLD_METHOD == "percentile") {
-  # Use the top N-th percentile of the FIRST sample as cutoff for each channel
-  ref_df <- filter(all_data, sample == unique(all_data$sample)[1])
-  thresholds <- sapply(fluor_channels, function(ch) {
-    quantile(ref_df[[ch]], probs = POSITIVE_PERCENTILE, na.rm = TRUE)
-  })
-  message("  Thresholds derived from percentile (", POSITIVE_PERCENTILE * 100,
-          "%) of sample: ", unique(all_data$sample)[1])
+  ref_df     <- all_data[all_data$sample == unique(all_data$sample)[1], ]
+  thresholds <- sapply(fluor_channels,
+                       function(ch) quantile(ref_df[[ch]],
+                                             probs   = POSITIVE_PERCENTILE,
+                                             na.rm   = TRUE))
+  message("  Using ", POSITIVE_PERCENTILE * 100,
+          "th-percentile thresholds from: ", unique(all_data$sample)[1])
 } else {
   thresholds <- setNames(rep(POSITIVE_THRESHOLD_VALUE, length(fluor_channels)),
                          fluor_channels)
   message("  Using fixed threshold: ", POSITIVE_THRESHOLD_VALUE)
 }
 
-# Calculate % positive
 pct_positive <- all_data %>%
   group_by(sample) %>%
   summarise(
     across(
       all_of(fluor_channels),
-      ~ round(mean(. > thresholds[cur_column()], na.rm = TRUE) * 100, 2)
+      ~ round(mean(.x > thresholds[cur_column()], na.rm = TRUE) * 100, 2)
     ),
     .groups = "drop"
   )
 
-message("% Positive cells:")
 print(as.data.frame(pct_positive))
 
 write.csv(pct_positive,
-          file = file.path(OUTPUT_DIR, "percent_positive.csv"),
+          file      = file.path(OUTPUT_DIR, "percent_positive.csv"),
           row.names = FALSE)
-message("  Saved: ", file.path(OUTPUT_DIR, "percent_positive.csv"))
+message("  Saved: percent_positive.csv")
 
 # -----------------------------------------------------------------------------
-# 8. SUMMARY PLOT — MFI heatmap across samples and channels
+# 10. MFI HEATMAP  (summary overview)
 # -----------------------------------------------------------------------------
 
-message("\n--- Generating MFI summary heatmap ---")
+message("\n--- MFI heatmap ---")
 
 mfi_long <- mfi_table %>%
   pivot_longer(-sample, names_to = "channel", values_to = "MFI")
 
-p_heat <- ggplot(mfi_long, aes(x = channel, y = sample, fill = log1p(MFI))) +
-  geom_tile(colour = "white") +
+p_heat <- ggplot(mfi_long,
+                 aes(x = channel, y = sample, fill = log1p(MFI))) +
+  geom_tile(colour = "white", linewidth = 0.5) +
+  geom_text(aes(label = round(MFI, 0)), size = 3, colour = "white") +
   scale_fill_viridis_c(name = "log1p(MFI)") +
-  labs(title = "MFI heatmap", x = "Channel", y = "Sample") +
-  theme_bw() +
+  labs(title = "MFI per channel per sample", x = NULL, y = NULL) +
+  theme_bw(base_size = 13) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
+heatmap_w <- max(6, length(fluor_channels) * 1.1)
+heatmap_h <- max(4, nrow(mfi_table) * 0.8 + 2)
+
 ggsave(file.path(OUTPUT_DIR, "MFI_heatmap.png"), p_heat,
-       width = max(6, length(fluor_channels) * 0.8), height = max(4, nrow(mfi_table) * 0.6 + 2),
-       dpi = 150)
-message("  Saved: ", file.path(OUTPUT_DIR, "MFI_heatmap.png"))
+       width = heatmap_w, height = heatmap_h, dpi = 150)
+message("  Saved: MFI_heatmap.png")
 
 # -----------------------------------------------------------------------------
-message("\nAnalysis complete. All outputs saved to: ", OUTPUT_DIR)
+message("\nDone. All outputs in: ", OUTPUT_DIR)
