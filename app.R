@@ -14,8 +14,8 @@ ROOTS <- getVolumes()()
 
 # Pseudo-log transform helpers (sigma = 1, matching the histogram x-axis).
 # plotly stores data in transformed space, so shapes need transformed coordinates.
-plog_fwd <- function(x) asinh(x)          # original  → plotly axis
-plog_inv <- function(y) sinh(y)           # plotly axis → original
+plog_fwd <- function(x) asinh(x)   # original  → plotly axis
+plog_inv <- function(y) sinh(y)    # plotly axis → original
 
 ui <- page_sidebar(
   title    = "Flow Cytometry Analysis",
@@ -97,7 +97,7 @@ server <- function(input, output, session) {
     tagList(
       hr(),
       tags$label("Sample Labels", class = "form-label fw-semibold"),
-      tags$small("Click a row to filter the histogram to that sample.",
+      tags$small("Edit the Sample Name column to label your samples.",
                  class = "text-muted d-block mb-1"),
       rHandsontableOutput("plate_layout", width = "100%")
     )
@@ -111,13 +111,12 @@ server <- function(input, output, session) {
       stringsAsFactors = FALSE,
       check.names   = FALSE
     )
-    # selectCallback = TRUE fires input$plate_layout_select on every cell click
-    rhandsontable(df, stretchH = "all", rowHeaders = NULL,
-                  selectCallback = TRUE) |>
+    rhandsontable(df, stretchH = "all", rowHeaders = NULL) |>
       hot_col("Filename",    readOnly = TRUE) |>
       hot_col("Sample Name", readOnly = FALSE)
   })
 
+  # Reactive data frame of current table contents — used by plots later.
   sample_map <- reactive({
     if (!is.null(input$plate_layout)) {
       hot_to_r(input$plate_layout)
@@ -137,35 +136,16 @@ server <- function(input, output, session) {
     print(hot_to_r(input$plate_layout))
   })
 
-  # ── DEBUG: trace selection inputs ─────────────────────────────────────────
-  # Prints to the RStudio console whenever the table selection changes.
-  # Remove these observers once the selection is confirmed to work.
-  observeEvent(input$plate_layout_select, {
-    cat("\n[DEBUG] plate_layout_select fired. Raw value:\n")
-    print(input$plate_layout_select)
-  }, ignoreNULL = FALSE)
-
   # ── Sample selection ──────────────────────────────────────────────────────
-  # A single click on a row shows just that sample; nothing selected → all samples.
+  # Uses input$selected_sample (a selectInput rendered inside view_controls_ui).
+  # Returns a character vector of sampleNames to include in channel_data().
+
   selected_samples <- reactive({
-    fs <- flow_set()
-    req(fs)
-    all_names <- sampleNames(fs)
-    sel <- input$plate_layout_select
-
-    cat("\n[DEBUG] selected_samples() running.\n")
-    cat("  input$plate_layout_select =", deparse(sel), "\n")
-
-    if (is.null(sel) || is.null(sel$r) || sel$r < 0 || sel$r >= length(all_names)) {
-      cat("  → returning ALL samples (no valid selection)\n")
-      return(all_names)
-    }
-    # sel$r is 0-based; collect every row in the selection range
-    rows <- seq(sel$r, sel$r2) + 1L
-    rows <- rows[rows >= 1L & rows <= length(all_names)]
-    result <- if (length(rows) == 0L) all_names else all_names[rows]
-    cat("  → returning:", paste(basename(result), collapse = ", "), "\n")
-    result
+    req(flow_set())
+    all_names <- sampleNames(flow_set())
+    sel <- input$selected_sample
+    if (is.null(sel) || sel == "__all__") return(all_names)
+    if (sel %in% all_names) sel else all_names
   })
 
   # ── View selector ─────────────────────────────────────────────────────────
@@ -177,11 +157,17 @@ server <- function(input, output, session) {
 
   output$view_controls_ui <- renderUI({
     req(flow_set())
-    channels <- colnames(flow_set())
+    channels  <- colnames(flow_set())
+    all_names <- sampleNames(flow_set())
+
     if (input$active_view == "Histogram") {
       tagList(
         selectInput("hist_channel", "Channel",
-                    choices = channels, selected = channels[1])
+                    choices = channels, selected = channels[1]),
+        selectInput("selected_sample", "Sample",
+                    choices  = c("All samples" = "__all__",
+                                 setNames(all_names, basename(all_names))),
+                    selected = "__all__")
       )
     } else if (input$active_view == "Dot Plot") {
       p("Dot plot controls will appear here.", class = "text-muted fst-italic small")
@@ -192,7 +178,7 @@ server <- function(input, output, session) {
 
   # ── Histogram ─────────────────────────────────────────────────────────────
 
-  # Data for the selected channel, filtered to the clicked sample (or all).
+  # Data for the selected channel, filtered to the chosen sample (or all).
   channel_data <- reactive({
     req(flow_set(), input$hist_channel)
     df <- extract_channel_data(flow_set(), input$hist_channel)
@@ -233,10 +219,9 @@ server <- function(input, output, session) {
     d <- event_data("plotly_relayout", source = "hist")
     if (is.null(d) || is.null(d[["shapes[0].x0"]])) return()
 
-    # Shape x is in transformed space; convert back to original data units
     original_x <- plog_inv(as.numeric(d[["shapes[0].x0"]]))
-    rng <- slider_range()
-    original_x <- max(rng$lo, min(rng$hi, original_x))  # clamp to slider range
+    rng        <- slider_range()
+    original_x <- max(rng$lo, min(rng$hi, original_x))
 
     updateSliderInput(session, "threshold", value = round(original_x))
   })
@@ -255,8 +240,7 @@ server <- function(input, output, session) {
     )
   })
 
-  # Histogram — only re-renders when channel data changes, NOT when the
-  # threshold slider moves (the shape is updated via plotlyProxy instead).
+  # Histogram — only re-renders when channel data changes, NOT on slider moves.
   output$histogram <- renderPlotly({
     req(channel_data())
     df       <- channel_data()
@@ -273,11 +257,8 @@ server <- function(input, output, session) {
       labs(subtitle = subtitle, x = input$hist_channel, y = "Count") +
       theme_bw(base_size = 13)
 
-    # Use isolate() so the threshold slider does NOT trigger a full re-render;
-    # the plotlyProxy observer keeps the shape in sync instead.
     thresh <- isolate(input$threshold)
-
-    plt <- ggplotly(p, source = "hist") |> layout(showlegend = FALSE)
+    plt    <- ggplotly(p, source = "hist") |> layout(showlegend = FALSE)
 
     if (!is.null(thresh)) {
       plt <- plt |> layout(shapes = list(list(
@@ -288,7 +269,6 @@ server <- function(input, output, session) {
       )))
     }
 
-    # shapePosition = TRUE makes the vertical line draggable
     plt |> config(edits = list(shapePosition = TRUE))
   })
 }
