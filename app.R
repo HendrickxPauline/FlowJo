@@ -13,7 +13,8 @@ source("helpers.R")
 ROOTS <- getVolumes()()
 
 ui <- page_sidebar(
-  title = "Flow Cytometry Analysis",
+  title    = "Flow Cytometry Analysis",
+  fillable = TRUE,
   sidebar = sidebar(
     width = 280,
     shinyDirButton(
@@ -24,28 +25,41 @@ ui <- page_sidebar(
     uiOutput("file_status"),
     uiOutput("plate_layout_ui"),
     hr(),
-    uiOutput("channel_ui"),
-    uiOutput("hist_channel_ui"),
-    hr(),
-    p("Dot plot controls will appear here", class = "text-muted fst-italic")
+    # View switcher — always visible so the user can pick before loading files
+    radioButtons(
+      inputId  = "active_view",
+      label    = "Show",
+      choices  = c("Histogram", "Dot Plot", "Results Table"),
+      selected = "Histogram"
+    ),
+    # Context-sensitive controls for the active view
+    uiOutput("view_controls_ui")
   ),
+  # Single card that fills the main panel; full_screen = TRUE adds an expand button
   card(
+    fill        = TRUE,
     full_screen = TRUE,
-    card_header("Dot Plot"),
-    card_body(min_height = 300)
-  ),
-  card(
-    full_screen = TRUE,
-    card_header("Histogram"),
+    card_header(textOutput("card_title", inline = TRUE)),
     card_body(
-      plotlyOutput("histogram"),
-      uiOutput("threshold_slider_ui")
+      fill    = TRUE,
+      padding = "1rem",
+      # ── Histogram ──────────────────────────────────────────────────────
+      conditionalPanel(
+        "input.active_view === 'Histogram'",
+        plotlyOutput("histogram", width = "100%", height = "520px"),
+        uiOutput("threshold_slider_ui")
+      ),
+      # ── Dot Plot (placeholder) ──────────────────────────────────────────
+      conditionalPanel(
+        "input.active_view === 'Dot Plot'",
+        p("Dot plot will appear here.", class = "text-muted fst-italic p-2")
+      ),
+      # ── Results Table (placeholder) ────────────────────────────────────
+      conditionalPanel(
+        "input.active_view === 'Results Table'",
+        p("Results table will appear here.", class = "text-muted fst-italic p-2")
+      )
     )
-  ),
-  card(
-    full_screen = TRUE,
-    card_header("Results Table"),
-    card_body(min_height = 200)
   )
 )
 
@@ -106,7 +120,7 @@ server <- function(input, output, session) {
       check.names   = FALSE
     )
     rhandsontable(df, stretchH = "all", rowHeaders = NULL) |>
-      hot_col("Filename",    readOnly = TRUE)  |>
+      hot_col("Filename",    readOnly = TRUE) |>
       hot_col("Sample Name", readOnly = FALSE)
   })
 
@@ -130,33 +144,38 @@ server <- function(input, output, session) {
     print(hot_to_r(input$plate_layout))
   })
 
-  # ── Channel checkboxes ────────────────────────────────────────────────────
+  # ── View selector ─────────────────────────────────────────────────────────
 
-  output$channel_ui <- renderUI({
-    fs <- flow_set()
-    if (is.null(fs)) {
-      return(p("Channels will appear here", class = "text-muted fst-italic"))
+  # Card header mirrors the active view name.
+  output$card_title <- renderText({
+    req(input$active_view)
+    input$active_view
+  })
+
+  # Sidebar controls that change depending on the active view.
+  # Shown only after files are loaded.
+  output$view_controls_ui <- renderUI({
+    req(flow_set())
+    channels <- colnames(flow_set())
+
+    if (input$active_view == "Histogram") {
+      tagList(
+        selectInput(
+          inputId  = "hist_channel",
+          label    = "Channel",
+          choices  = channels,
+          selected = channels[1]
+        )
+      )
+    } else if (input$active_view == "Dot Plot") {
+      p("Dot plot controls will appear here.",
+        class = "text-muted fst-italic small")
+    } else {
+      NULL
     }
-    checkboxGroupInput(
-      inputId  = "channels",
-      label    = "Channels",
-      choices  = colnames(fs),
-      selected = colnames(fs)
-    )
   })
 
   # ── Histogram ─────────────────────────────────────────────────────────────
-
-  # Channel selector — appears once files are loaded.
-  output$hist_channel_ui <- renderUI({
-    req(flow_set())
-    selectInput(
-      inputId  = "hist_channel",
-      label    = "Histogram Channel",
-      choices  = colnames(flow_set()),
-      selected = colnames(flow_set())[1]
-    )
-  })
 
   # Combined data for the selected channel across all samples.
   channel_data <- reactive({
@@ -198,7 +217,6 @@ server <- function(input, output, session) {
       labs(x = input$hist_channel, y = "Count") +
       theme_bw(base_size = 13)
 
-    # Add threshold line once the slider has rendered.
     if (!is.null(input$threshold)) {
       p <- p + geom_vline(xintercept = input$threshold,
                           colour = "red", linetype = "dashed", linewidth = 0.8)
