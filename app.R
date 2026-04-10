@@ -137,20 +137,35 @@ server <- function(input, output, session) {
     print(hot_to_r(input$plate_layout))
   })
 
-  # Which sample(s) to show in the histogram.
+  # ── DEBUG: trace selection inputs ─────────────────────────────────────────
+  # Prints to the RStudio console whenever the table selection changes.
+  # Remove these observers once the selection is confirmed to work.
+  observeEvent(input$plate_layout_select, {
+    cat("\n[DEBUG] plate_layout_select fired. Raw value:\n")
+    print(input$plate_layout_select)
+  }, ignoreNULL = FALSE)
+
+  # ── Sample selection ──────────────────────────────────────────────────────
   # A single click on a row shows just that sample; nothing selected → all samples.
   selected_samples <- reactive({
     fs <- flow_set()
     req(fs)
     all_names <- sampleNames(fs)
     sel <- input$plate_layout_select
+
+    cat("\n[DEBUG] selected_samples() running.\n")
+    cat("  input$plate_layout_select =", deparse(sel), "\n")
+
     if (is.null(sel) || is.null(sel$r) || sel$r < 0 || sel$r >= length(all_names)) {
+      cat("  → returning ALL samples (no valid selection)\n")
       return(all_names)
     }
     # sel$r is 0-based; collect every row in the selection range
     rows <- seq(sel$r, sel$r2) + 1L
     rows <- rows[rows >= 1L & rows <= length(all_names)]
-    if (length(rows) == 0L) all_names else all_names[rows]
+    result <- if (length(rows) == 0L) all_names else all_names[rows]
+    cat("  → returning:", paste(basename(result), collapse = ", "), "\n")
+    result
   })
 
   # ── View selector ─────────────────────────────────────────────────────────
