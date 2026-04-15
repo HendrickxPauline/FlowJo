@@ -45,6 +45,30 @@ extract_two_channels <- function(fs, ch_x, ch_y) {
   }))
 }
 
+#' Compute per-sample MFI and % above threshold for the results table.
+#' sample_map must have columns "Filename" and "Sample Name".
+#' Falls back to the filename when Sample Name is empty.
+compute_results_table <- function(fs, channel, threshold, sample_map) {
+  all_names <- flowCore::sampleNames(fs)
+  do.call(rbind, lapply(all_names, function(sname) {
+    idx   <- match(sname, sample_map$Filename)
+    label <- if (!is.na(idx)) trimws(sample_map[["Sample Name"]][idx]) else ""
+    if (is.na(label) || label == "") label <- sname
+
+    vals <- flowCore::exprs(fs[[sname]])[, channel]
+    vals <- vals[is.finite(vals)]
+
+    data.frame(
+      `Sample Name`       = label,
+      Channel             = channel,
+      MFI                 = round(median(vals), 1),
+      `% Above Threshold` = round(mean(vals > threshold) * 100, 2),
+      stringsAsFactors    = FALSE,
+      check.names         = FALSE
+    )
+  }))
+}
+
 #' Estimate the 2-D kernel density at each (x, y) point.
 #' Returns a numeric vector the same length as x (and y).
 #' Uses MASS::kde2d internally; returns zeros on failure.

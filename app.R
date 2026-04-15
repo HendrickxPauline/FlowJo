@@ -6,6 +6,7 @@ library(flowCore)
 library(ggplot2)
 library(plotly)
 library(scales)
+library(DT)
 
 source("helpers.R")
 
@@ -56,7 +57,7 @@ ui <- page_sidebar(
       ),
       conditionalPanel(
         "input.active_view === 'Results Table'",
-        p("Results table will appear here.", class = "text-muted fst-italic p-2")
+        DT::dataTableOutput("results_table", width = "100%")
       )
     )
   )
@@ -177,7 +178,20 @@ server <- function(input, output, session) {
                     choices = channels, selected = channels[2])
       )
     } else {
-      NULL
+      # Results Table view: show which channel and threshold the table is based on
+      ch  <- hist_channel_val()
+      thr <- threshold_val()
+      if (is.null(ch) || is.null(thr)) {
+        p("Open the Histogram view first to choose a channel and set a threshold.",
+          class = "text-muted fst-italic small")
+      } else {
+        tagList(
+          tags$p(tags$b("Channel: "), ch, class = "small mb-1"),
+          tags$p(tags$b("Threshold: "),
+                 format(round(thr), big.mark = ",", scientific = FALSE),
+                 class = "small mb-0")
+        )
+      }
     }
   })
 
@@ -202,6 +216,11 @@ server <- function(input, output, session) {
 
   # Threshold stored for use by other panels later.
   threshold_val <- reactiveVal(NULL)
+
+  # Persist the histogram channel across view switches so the Results Table
+  # can read it even when the Histogram selectInput is not in the DOM.
+  hist_channel_val <- reactiveVal(NULL)
+  observeEvent(input$hist_channel, hist_channel_val(input$hist_channel))
 
   # When the slider moves: store the value and update the shape via proxy
   # (no full histogram re-render needed).
@@ -243,6 +262,43 @@ server <- function(input, output, session) {
       width   = "100%",
       step    = 1
     )
+  })
+
+  # ── Results table ─────────────────────────────────────────────────────────
+
+  # Recomputes whenever channel, threshold, or sample labels change.
+  results_data <- reactive({
+    req(flow_set(), hist_channel_val(), is.numeric(threshold_val()))
+    compute_results_table(
+      fs         = flow_set(),
+      channel    = hist_channel_val(),
+      threshold  = threshold_val(),
+      sample_map = sample_map()
+    )
+  })
+
+  output$results_table <- DT::renderDataTable({
+    req(results_data())
+    df <- results_data()
+    DT::datatable(
+      df,
+      rownames  = FALSE,
+      selection = "none",
+      options   = list(
+        dom        = "t",           # table only — no search bar or pagination chrome
+        pageLength = nrow(df),
+        ordering   = TRUE,
+        scrollX    = TRUE
+      )
+    ) |>
+      DT::formatRound("MFI", digits = 0) |>
+      DT::formatStyle(
+        "% Above Threshold",
+        background         = DT::styleColorBar(c(0, 100), "#4C72B0"),
+        backgroundSize     = "98% 88%",
+        backgroundRepeat   = "no-repeat",
+        backgroundPosition = "center"
+      )
   })
 
   # ── Dot plot ──────────────────────────────────────────────────────────────
