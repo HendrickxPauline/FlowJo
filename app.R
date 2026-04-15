@@ -52,7 +52,7 @@ ui <- page_sidebar(
       ),
       conditionalPanel(
         "input.active_view === 'Dot Plot'",
-        p("Dot plot will appear here.", class = "text-muted fst-italic p-2")
+        plotlyOutput("dotplot", width = "100%", height = "520px")
       ),
       conditionalPanel(
         "input.active_view === 'Results Table'",
@@ -170,7 +170,12 @@ server <- function(input, output, session) {
                     selected = "__all__")
       )
     } else if (input$active_view == "Dot Plot") {
-      p("Dot plot controls will appear here.", class = "text-muted fst-italic small")
+      tagList(
+        selectInput("dot_x", "X Axis",
+                    choices = channels, selected = channels[1]),
+        selectInput("dot_y", "Y Axis",
+                    choices = channels, selected = channels[2])
+      )
     } else {
       NULL
     }
@@ -240,7 +245,50 @@ server <- function(input, output, session) {
     )
   })
 
-  # Histogram — only re-renders when channel data changes, NOT on slider moves.
+  # ── Dot plot ──────────────────────────────────────────────────────────────
+
+  # Subsample + density computed once per channel change, not per render.
+  dot_data <- reactive({
+    req(flow_set(), input$dot_x, input$dot_y)
+    df <- extract_two_channels(flow_set(), input$dot_x, input$dot_y)
+    df <- df[is.finite(df$x) & is.finite(df$y), ]
+
+    # Cap at 20 000 points so plotly stays responsive
+    if (nrow(df) > 20000L) {
+      set.seed(42L)
+      df <- df[sample(nrow(df), 20000L), ]
+    }
+
+    df$density <- point_density(df$x, df$y)
+    df[order(df$density), ]   # low density first → dense points rendered on top
+  })
+
+  output$dotplot <- renderPlotly({
+    req(dot_data())
+    df <- dot_data()
+
+    p <- ggplot(df, aes(x = x, y = y, colour = density)) +
+      geom_point(size = 0.4, alpha = 0.6, stroke = 0) +
+      scale_colour_gradientn(
+        colours = c("#0000FF", "#00BFFF", "#00FF00", "#FFFF00", "#FF0000"),
+        name    = "Density"
+      ) +
+      scale_x_continuous(
+        trans  = pseudo_log_trans(sigma = 1),
+        labels = label_number(scale_cut = cut_short_scale())
+      ) +
+      scale_y_continuous(
+        trans  = pseudo_log_trans(sigma = 1),
+        labels = label_number(scale_cut = cut_short_scale())
+      ) +
+      labs(x = input$dot_x, y = input$dot_y) +
+      theme_bw(base_size = 13) +
+      theme(legend.position = "right")
+
+    ggplotly(p) |> layout(showlegend = TRUE)
+  })
+
+  # ── Histogram — only re-renders when channel data changes, NOT on slider moves.
   output$histogram <- renderPlotly({
     req(channel_data())
     df       <- channel_data()

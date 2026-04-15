@@ -30,3 +30,33 @@ extract_channel_data <- function(fs, channel) {
     )
   }))
 }
+
+#' Extract two channels from a flowSet for a dot plot.
+#' Returns a data frame with columns: sample, x, y.
+extract_two_channels <- function(fs, ch_x, ch_y) {
+  do.call(rbind, lapply(flowCore::sampleNames(fs), function(sname) {
+    m <- flowCore::exprs(fs[[sname]])
+    data.frame(
+      sample = sname,
+      x      = m[, ch_x],
+      y      = m[, ch_y],
+      stringsAsFactors = FALSE
+    )
+  }))
+}
+
+#' Estimate the 2-D kernel density at each (x, y) point.
+#' Returns a numeric vector the same length as x (and y).
+#' Uses MASS::kde2d internally; returns zeros on failure.
+point_density <- function(x, y, n = 100L) {
+  ok  <- is.finite(x) & is.finite(y)
+  out <- rep(0, length(x))
+  if (sum(ok) < 10L) return(out)
+  tryCatch({
+    dens    <- MASS::kde2d(x[ok], y[ok], n = n)
+    ix      <- pmax(1L, pmin(findInterval(x[ok], dens$x), length(dens$x)))
+    iy      <- pmax(1L, pmin(findInterval(y[ok], dens$y), length(dens$y)))
+    out[ok] <- dens$z[cbind(ix, iy)]
+    out
+  }, error = function(e) out)
+}
